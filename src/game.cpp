@@ -31,6 +31,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "client/joystick_controller.h"
 #include "clientmap.h"
 #include "clouds.h"
+#include <cmath>
 #include "config.h"
 #include "content_cao.h"
 #include "event_manager.h"
@@ -46,6 +47,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "gui/guiVolumeChange.h"
 #include "gui/mainmenumanager.h"
 #include "mapblock.h"
+#include "mesh.h" // For updating the global applyFacesShading function pointer
 #include "minimap.h"
 #include "nodedef.h"         // Needed for determining pointing to nodes
 #include "nodemetadata.h"
@@ -88,7 +90,7 @@ struct TextDestNodeMetadata : public TextDest
 	{
 		std::string ntext = wide_to_utf8(text);
 		infostream << "Submitting 'text' field of node at (" << m_p.X << ","
-			   << m_p.Y << "," << m_p.Z << "): " << ntext << std::endl;
+				 << m_p.Y << "," << m_p.Z << "): " << ntext << std::endl;
 		StringMap fields;
 		fields["text"] = ntext;
 		m_client->sendNodemetaFields(m_p, "", fields);
@@ -308,7 +310,7 @@ public:
 	}
 
 	void draw(s32 x_left, s32 y_bottom, video::IVideoDriver *driver,
-		  gui::IGUIFont *font) const
+			gui::IGUIFont *font) const
 	{
 		// Do *not* use UNORDERED_MAP here as the order needs
 		// to be the same for each call to prevent flickering
@@ -379,16 +381,16 @@ public:
 			snprintf(buf, 10, "%.3g", show_max);
 			font->draw(utf8_to_wide(buf).c_str(),
 					core::rect<s32>(textx, y - graphh,
-						   textx2, y - graphh + texth),
+							 textx2, y - graphh + texth),
 					meta.color);
 			snprintf(buf, 10, "%.3g", show_min);
 			font->draw(utf8_to_wide(buf).c_str(),
 					core::rect<s32>(textx, y - texth,
-						   textx2, y),
+							 textx2, y),
 					meta.color);
 			font->draw(utf8_to_wide(id).c_str(),
 					core::rect<s32>(textx, y - graphh / 2 - texth / 2,
-						   textx2, y - graphh / 2 + texth / 2),
+							 textx2, y - graphh / 2 + texth / 2),
 					meta.color);
 			s32 graph1y = y;
 			s32 graph1h = graphh;
@@ -429,7 +431,7 @@ public:
 						s32 ivalue1 = lastscaledvalue * graph1h;
 						s32 ivalue2 = scaledvalue * graph1h;
 						driver->draw2DLine(v2s32(x - 1, graph1y - ivalue1),
-								   v2s32(x, graph1y - ivalue2), meta.color);
+									 v2s32(x, graph1y - ivalue2), meta.color);
 					}
 
 					lastscaledvalue = scaledvalue;
@@ -437,7 +439,7 @@ public:
 				} else {
 					s32 ivalue = scaledvalue * graph1h;
 					driver->draw2DLine(v2s32(x, graph1y),
-							   v2s32(x, graph1y - ivalue), meta.color);
+								 v2s32(x, graph1y - ivalue), meta.color);
 				}
 
 				x++;
@@ -615,13 +617,17 @@ class GameGlobalShaderConstantSetter : public IShaderConstantSetter
 	CachedVertexShaderSetting<float> m_animation_timer_vertex;
 	CachedPixelShaderSetting<float> m_animation_timer_pixel;
 	CachedPixelShaderSetting<float, 3> m_day_light;
+	CachedPixelShaderSetting<float, 4> m_light_color;
+	CachedPixelShaderSetting<float, 3> m_light_direction;
 	CachedPixelShaderSetting<float, 3> m_eye_position_pixel;
 	CachedVertexShaderSetting<float, 3> m_eye_position_vertex;
+	CachedPixelShaderSetting<float, 3> m_wrapped_eye_position_pixel;
 	CachedPixelShaderSetting<float, 3> m_minimap_yaw;
 	CachedPixelShaderSetting<SamplerLayer_t> m_base_texture;
 	CachedPixelShaderSetting<SamplerLayer_t> m_normal_texture;
 	CachedPixelShaderSetting<SamplerLayer_t> m_texture_flags;
 	Client *m_client;
+	Camera *m_camera;
 
 public:
 	void onSettingsChange(const std::string &name)
@@ -637,8 +643,10 @@ public:
 
 	void setSky(Sky *sky) { m_sky = sky; }
 
+	void setCamera(Camera *camera) { m_camera = camera; }
+
 	GameGlobalShaderConstantSetter(Sky *sky, bool *force_fog_off,
-			f32 *fog_range, Client *client) :
+			f32 *fog_range, Client *client, Camera *camera) :
 		m_sky(sky),
 		m_force_fog_off(force_fog_off),
 		m_fog_range(fog_range),
@@ -647,13 +655,17 @@ public:
 		m_animation_timer_vertex("animationTimer"),
 		m_animation_timer_pixel("animationTimer"),
 		m_day_light("dayLight"),
+		m_light_color("lightColor"),
+		m_light_direction("lightDirection"),
 		m_eye_position_pixel("eyePosition"),
 		m_eye_position_vertex("eyePosition"),
+		m_wrapped_eye_position_pixel("wrappedEyePosition"),
 		m_minimap_yaw("yawVec"),
 		m_base_texture("baseTexture"),
 		m_normal_texture("normalTexture"),
 		m_texture_flags("textureFlags"),
-		m_client(client)
+		m_client(client),
+		m_camera(camera)
 	{
 		g_settings->registerChangedCallback("enable_fog", settingsCallback, this);
 		m_fog_enabled = g_settings->getBool("enable_fog");
@@ -698,6 +710,38 @@ public:
 			sunlight.b };
 		m_day_light.set(dnc, services);
 
+		// Lighting will also use location-based lighting in the future
+		// for smaller models so the sun color alone isn't sufficient
+		const float time_of_day = (float)m_client->getEnv().getTimeOfDayF();
+		float sun_angle = time_of_day * M_PI * 2.0f;
+		float light_color[4] = {
+			sunlight.r,
+			sunlight.g,
+			sunlight.b,
+			 1.0f };
+		light_color[3] = 1.0f - (time_of_day / 1000.0f);
+		if (daynight_ratio > 320 && daynight_ratio < 470) { // Moon light
+			sun_angle -= M_PI * (1.0f - ((daynight_ratio - 320) / 150.0f));
+
+			light_color[1] *= 0.8f; // Reduced green and blue
+			light_color[2] *= 0.9f;
+		} else if (daynight_ratio <= 320) {
+			sun_angle -= M_PI;
+
+			light_color[0] *= 0.8f; // Reduced red and green
+			light_color[1] *= 0.9f;
+		}
+
+		m_light_color.set(light_color, services);
+
+		const float as = sin(sun_angle);
+		const float ac = -cos(sun_angle);
+		float light_direction[3] = {
+			as,
+			ac,
+			0.0f };
+		m_light_direction.set(light_direction, services);
+
 		u32 animation_timer = porting::getTimeMs() % 100000;
 		float animation_timer_f = (float)animation_timer / 100000.f;
 		m_animation_timer_vertex.set(&animation_timer_f, services);
@@ -714,6 +758,15 @@ public:
 #endif
 		m_eye_position_pixel.set(eye_position_array, services);
 		m_eye_position_vertex.set(eye_position_array, services);
+
+		// Override the existing array; no need to allocate another
+		if (m_camera) {
+			v3f co = intToFloat(m_camera->getOffset(), BS);
+			eye_position_array[0] = epos.X - co.X;
+			eye_position_array[1] = epos.Y - co.Y;
+			eye_position_array[2] = epos.Z - co.Z;
+			m_wrapped_eye_position_pixel.set(eye_position_array, services);
+		}
 
 		if (m_client->getMinimap()) {
 			float minimap_yaw_array[3];
@@ -744,14 +797,17 @@ class GameGlobalShaderConstantSetterFactory : public IShaderConstantSetterFactor
 	bool *m_force_fog_off;
 	f32 *m_fog_range;
 	Client *m_client;
+	Camera *m_camera;
 	std::vector<GameGlobalShaderConstantSetter *> created_nosky;
+	std::vector<GameGlobalShaderConstantSetter *> created_camera;
 public:
 	GameGlobalShaderConstantSetterFactory(bool *force_fog_off,
 			f32 *fog_range, Client *client) :
 		m_sky(NULL),
 		m_force_fog_off(force_fog_off),
 		m_fog_range(fog_range),
-		m_client(client)
+		m_client(client),
+		m_camera(NULL)
 	{}
 
 	void setSky(Sky *sky) {
@@ -762,12 +818,24 @@ public:
 		created_nosky.clear();
 	}
 
+	void setCamera(Camera *camera) {
+		m_camera = camera;
+		for (size_t i = 0; i < created_camera.size(); ++i) {
+			created_camera[i]->setCamera(m_camera);
+		}
+		created_camera.clear();
+	}
+
 	virtual IShaderConstantSetter* create()
 	{
 		GameGlobalShaderConstantSetter *scs = new GameGlobalShaderConstantSetter(
-				m_sky, m_force_fog_off, m_fog_range, m_client);
+				m_sky, m_force_fog_off, m_fog_range, m_client, m_camera);
 		if (!m_sky)
 			created_nosky.push_back(scs);
+
+		if (!m_camera)
+			created_camera.push_back(scs);
+
 		return scs;
 	}
 };
@@ -788,8 +856,8 @@ bool nodePlacementPrediction(Client &client, const ItemDefinition &playeritem_de
 
 	if (!prediction.empty() && !nodedef->get(node).rightclickable) {
 		verbosestream << "Node placement prediction for "
-			      << playeritem_def.name << " is "
-			      << prediction << std::endl;
+						<< playeritem_def.name << " is "
+						<< prediction << std::endl;
 		v3s16 p = neighbourpos;
 
 		// Place inside node itself if buildable_to
@@ -811,9 +879,9 @@ bool nodePlacementPrediction(Client &client, const ItemDefinition &playeritem_de
 
 		if (!found) {
 			errorstream << "Node placement prediction failed for "
-				    << playeritem_def.name << " (places "
-				    << prediction
-				    << ") - Name not known" << std::endl;
+						<< playeritem_def.name << " (places "
+						<< prediction
+						<< ") - Name not known" << std::endl;
 			return false;
 		}
 
@@ -913,9 +981,9 @@ bool nodePlacementPrediction(Client &client, const ItemDefinition &playeritem_de
 			}
 		} catch (InvalidPositionException &e) {
 			errorstream << "Node placement prediction failed for "
-				    << playeritem_def.name << " (places "
-				    << prediction
-				    << ") - Position not loaded" << std::endl;
+						<< playeritem_def.name << " (places "
+						<< prediction
+						<< ") - Position not loaded" << std::endl;
 		}
 	}
 
@@ -1001,7 +1069,7 @@ static void updateChat(Client &client, f32 dtime, bool show_debug,
 
 	//now use real height of text and adjust rect according to this size
 	rect = core::rect<s32>(10, chat_y, width,
-			       chat_y + guitext_chat->getTextHeight());
+						 chat_y + guitext_chat->getTextHeight());
 
 
 	guitext_chat->setRelativePosition(rect);
@@ -1429,8 +1497,8 @@ private:
 	GameUIFlags flags;
 
 	/* 'cache'
-	   This class does take ownership/responsibily for cleaning up etc of any of
-	   these items (e.g. device)
+		 This class does take ownership/responsibily for cleaning up etc of any of
+		 these items (e.g. device)
 	*/
 	IrrlichtDevice *device;
 	video::IVideoDriver *driver;
@@ -1544,6 +1612,8 @@ Game::Game() :
 		&settingChangedCallback, this);
 	g_settings->registerChangedCallback("camera_smoothing",
 		&settingChangedCallback, this);
+	g_settings->registerChangedCallback("enable_shaders",
+		&settingChangedCallback, this);
 
 	readSettings();
 
@@ -1602,6 +1672,8 @@ Game::~Game()
 	g_settings->deregisterChangedCallback("cinematic_camera_smoothing",
 		&settingChangedCallback, this);
 	g_settings->deregisterChangedCallback("camera_smoothing",
+		&settingChangedCallback, this);
+	g_settings->deregisterChangedCallback("enable_shaders",
 		&settingChangedCallback, this);
 }
 
@@ -1883,8 +1955,8 @@ bool Game::createSingleplayerServer(const std::string &map_dir,
 		bind_addr.Resolve(bind_str.c_str());
 	} catch (ResolveError &e) {
 		infostream << "Resolving bind address \"" << bind_str
-			   << "\" failed: " << e.what()
-			   << " -- Listening on all addresses." << std::endl;
+				 << "\" failed: " << e.what()
+				 << " -- Listening on all addresses." << std::endl;
 	}
 
 	if (bind_addr.isIPv6() && !g_settings->getBool("enable_ipv6")) {
@@ -1947,6 +2019,8 @@ bool Game::createClient(const std::string &playername,
 	if (!camera || !camera->successfullyCreated(*error_message))
 		return false;
 	client->setCamera(camera);
+
+	scsf->setCamera(camera);
 
 	/* Clouds
 	 */
@@ -2337,19 +2411,19 @@ inline bool Game::handleCallbacks()
 
 	if (g_gamecallback->changepassword_requested) {
 		(new GUIPasswordChange(guienv, guiroot, -1,
-				       &g_menumgr, client))->drop();
+							 &g_menumgr, client))->drop();
 		g_gamecallback->changepassword_requested = false;
 	}
 
 	if (g_gamecallback->changevolume_requested) {
 		(new GUIVolumeChange(guienv, guiroot, -1,
-				     &g_menumgr))->drop();
+						 &g_menumgr))->drop();
 		g_gamecallback->changevolume_requested = false;
 	}
 
 	if (g_gamecallback->keyconfig_requested) {
 		(new GUIKeyChangeMenu(guienv, guiroot, -1,
-				      &g_menumgr))->drop();
+							&g_menumgr))->drop();
 		g_gamecallback->keyconfig_requested = false;
 	}
 
@@ -2619,7 +2693,7 @@ void Game::processItemSelection(u16 *new_playeritem)
 
 	s32 wheel = input->getMouseWheel();
 	u16 max_item = MYMIN(PLAYER_INVENTORY_SIZE - 1,
-		    player->hud_hotbar_itemcount - 1);
+				player->hud_hotbar_itemcount - 1);
 
 	s32 dir = wheel;
 
@@ -2893,10 +2967,10 @@ void Game::toggleFog()
 {
 	flags.force_fog_off = !flags.force_fog_off;
 	runData.statustext_time = 0;
-        if (flags.force_fog_off)
-                showStatusTextSimple("Fog disabled");
-        else
-                showStatusTextSimple("Fog enabled");
+				if (flags.force_fog_off)
+								showStatusTextSimple("Fog disabled");
+				else
+								showStatusTextSimple("Fog enabled");
 }
 
 
@@ -3549,9 +3623,9 @@ void Game::updateSound(f32 dtime)
 	// Update sound listener
 	v3s16 camera_offset = camera->getOffset();
 	sound->updateListener(camera->getCameraNode()->getPosition() + intToFloat(camera_offset, BS),
-			      v3f(0, 0, 0), // velocity
-			      camera->getDirection(),
-			      camera->getCameraNode()->getUpVector());
+						v3f(0, 0, 0), // velocity
+						camera->getDirection(),
+						camera->getCameraNode()->getUpVector());
 
 	bool mute_sound = g_settings->getBool("mute_sound");
 	if (mute_sound) {
@@ -3624,7 +3698,7 @@ void Game::processPlayerInteraction(f32 dtime, bool show_hud, bool show_debug)
 		shootline = core::line3d<f32>(camera_position,
 			camera_position + camera_direction * BS * d);
 	} else {
-	    // prevent player pointing anything in front-view
+			// prevent player pointing anything in front-view
 		shootline = core::line3d<f32>(camera_position,camera_position);
 	}
 
@@ -3664,7 +3738,7 @@ void Game::processPlayerInteraction(f32 dtime, bool show_hud, bool show_debug)
 	if (runData.digging) {
 		if (getLeftReleased()) {
 			infostream << "Left button released"
-			           << " (stopped digging)" << std::endl;
+								 << " (stopped digging)" << std::endl;
 			runData.digging = false;
 		} else if (pointed != runData.pointed_old) {
 			if (pointed.type == POINTEDTHING_NODE
@@ -3675,7 +3749,7 @@ void Game::processPlayerInteraction(f32 dtime, bool show_hud, bool show_debug)
 				// Don't reset.
 			} else {
 				infostream << "Pointing away from node"
-				           << " (stopped digging)" << std::endl;
+									 << " (stopped digging)" << std::endl;
 				runData.digging = false;
 				hud->updateSelectionMesh(camera_offset);
 			}
@@ -4106,7 +4180,7 @@ void Game::handleDigging(const PointedThing &pointed, const v3s16 &nodepos,
 		MapNode wasnode = map.getNodeNoEx(nodepos, &is_valid_position);
 		if (is_valid_position) {
 			if (client->moddingEnabled() &&
-			    		client->getScript()->on_dignode(nodepos, wasnode)) {
+							client->getScript()->on_dignode(nodepos, wasnode)) {
 				return;
 			}
 
@@ -4180,7 +4254,7 @@ void Game::updateFrame(ProfilerGraph *graph, RunStats *stats, f32 dtime,
 		direct_brightness = client->getEnv().getClientMap()
 				.getBackgroundBrightness(MYMIN(runData.fog_range * 1.2, 60 * BS),
 					daynight_ratio, (int)(old_brightness * 255.5), &sunlight_seen)
-				    / 255.0;
+						/ 255.0;
 	}
 
 	float time_of_day_smooth = runData.time_of_day_smooth;
@@ -4330,9 +4404,9 @@ void Game::updateFrame(ProfilerGraph *graph, RunStats *stats, f32 dtime,
 	updateGui(*stats, dtime, cam);
 
 	/*
-	   make sure menu is on top
-	   1. Delete formspec menu reference if menu was removed
-	   2. Else, make sure formspec menu is on top
+		 make sure menu is on top
+		 1. Delete formspec menu reference if menu was removed
+		 2. Else, make sure formspec menu is on top
 	*/
 	if (current_formspec) {
 		if (current_formspec->getReferenceCount() == 1) {
@@ -4644,6 +4718,11 @@ void Game::readSettings()
 	m_cache_cam_smoothing = rangelim(m_cache_cam_smoothing, 0.01f, 1.0f);
 	m_cache_mouse_sensitivity = rangelim(m_cache_mouse_sensitivity, 0.001, 100.0);
 
+	if (g_settings->getBool("enable_shaders") && g_settings->getBool("directional_shading"))
+		applyWorldShading = &applyNoFacesShading;
+	else
+		applyWorldShading = &applyFacesShading;
+
 	m_does_lost_focus_pause_game = g_settings->getBool("pause_on_lost_focus");
 }
 
@@ -4658,20 +4737,20 @@ void Game::extendedResourceCleanup()
 	// Extended resource accounting
 	infostream << "Irrlicht resources after cleanup:" << std::endl;
 	infostream << "\tRemaining meshes   : "
-	           << RenderingEngine::get_mesh_cache()->getMeshCount() << std::endl;
+						 << RenderingEngine::get_mesh_cache()->getMeshCount() << std::endl;
 	infostream << "\tRemaining textures : "
-	           << driver->getTextureCount() << std::endl;
+						 << driver->getTextureCount() << std::endl;
 
 	for (unsigned int i = 0; i < driver->getTextureCount(); i++) {
 		irr::video::ITexture *texture = driver->getTextureByIndex(i);
 		infostream << "\t\t" << i << ":" << texture->getName().getPath().c_str()
-		           << std::endl;
+							 << std::endl;
 	}
 
 	clearTextureNameCache();
 	infostream << "\tRemaining materials: "
-               << driver-> getMaterialRendererCount()
-		       << " (note: irrlicht doesn't support removing renderers)" << std::endl;
+							 << driver-> getMaterialRendererCount()
+					 << " (note: irrlicht doesn't support removing renderers)" << std::endl;
 }
 
 #define GET_KEY_NAME(KEY) gettext(getKeySetting(#KEY).name())

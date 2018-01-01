@@ -685,7 +685,7 @@ static void makeFastFace(const TileSpec &tile, u16 li0, u16 li1, u16 li2, u16 li
 		for (u8 i = 0; i < 4; i++) {
 			video::SColor c = encode_light(li[i], tile.emissive_light);
 			if (!tile.emissive_light)
-				applyFacesShading(c, normal);
+				applyWorldShading(c, normal);
 
 			face.vertices[i] = video::S3DVertex(vertex_pos[i], normal, c, f[i]);
 		}
@@ -897,6 +897,8 @@ static void getTileInfo(
 	getNodeTile(n, p_corrected, face_dir_corrected, data, tile);
 	const ContentFeatures &f = ndef->get(n);
 	tile.emissive_light = f.light_source;
+	if (f.light_source > 0)
+		tile.emissive_light = MYMAX(tile.emissive_light, 1);
 
 	// eg. water and glass
 	if (equivalent) {
@@ -1271,7 +1273,7 @@ MapBlockMesh::MapBlockMesh(MeshMakeData *data, v3s16 camera_offset):
 		if (m_use_tangent_vertices) {
 			scene::IMeshManipulator* meshmanip =
 				RenderingEngine::get_scene_manager()->getMeshManipulator();
-			meshmanip->recalculateTangents(m_mesh[layer], true, false, false);
+			meshmanip->recalculateTangents(m_mesh[layer], false, false, false);
 		}
 
 		if (m_mesh[layer]) {
@@ -1543,7 +1545,7 @@ void MeshCollector::append(const TileLayer &layer,
 		for (u32 i = 0; i < numVertices; i++) {
 			if (!light_source) {
 				c = original_c;
-				applyFacesShading(c, vertices[i].Normal);
+				applyWorldShading(c, vertices[i].Normal);
 			}
 			video::S3DVertexTangents vert(vertices[i].Pos + pos,
 					vertices[i].Normal, c, scale * vertices[i].TCoords);
@@ -1554,7 +1556,7 @@ void MeshCollector::append(const TileLayer &layer,
 		for (u32 i = 0; i < numVertices; i++) {
 			if (!light_source) {
 				c = original_c;
-				applyFacesShading(c, vertices[i].Normal);
+				applyWorldShading(c, vertices[i].Normal);
 			}
 			video::S3DVertex vert(vertices[i].Pos + pos, vertices[i].Normal, c,
 				scale * vertices[i].TCoords);

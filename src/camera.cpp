@@ -222,8 +222,8 @@ void Camera::addArmInertia(f32 player_yaw)
 
 	if (m_cam_vel.X > 1.0f || m_cam_vel.Y > 1.0f) {
 		/*
-		    The arm moves relative to the camera speed,
-		    with an acceleration factor.
+				The arm moves relative to the camera speed,
+				with an acceleration factor.
 		*/
 
 		if (m_cam_vel.X > 1.0f) {
@@ -258,8 +258,8 @@ void Camera::addArmInertia(f32 player_yaw)
 		m_arm_dir = dir(m_wieldmesh_offset);
 	} else {
 		/*
-		    Now the arm gets back to its default position when the camera stops,
-		    following a vector, with a smooth deceleration factor.
+				Now the arm gets back to its default position when the camera stops,
+				following a vector, with a smooth deceleration factor.
 		*/
 
 		f32 dec_X = 0.12f * (m_cam_vel_old.X * (1.0f +

@@ -1,4 +1,4 @@
-/*
+ /*
 Minetest
 Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
@@ -45,6 +45,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "wieldmesh.h"
 #include <algorithm>
 #include "client/renderingengine.h"
+#include "shader.h"
 
 class Settings;
 struct ToolCapabilities;
@@ -130,7 +131,7 @@ public:
 
 	void addToScene(ITextureSource *tsrc);
 	void removeFromScene(bool permanent);
-	void updateLight(u8 light_at_pos);
+	void updateLight(u8 light_at_pos, u8  artificial_light_ratio);
 	v3s16 getLightPosition();
 	void updateNodePos();
 
@@ -203,7 +204,7 @@ void TestCAO::removeFromScene(bool permanent)
 	m_node = NULL;
 }
 
-void TestCAO::updateLight(u8 light_at_pos)
+void TestCAO::updateLight(u8 light_at_pos, u8 artificial_light_ratio)
 {
 }
 
@@ -301,6 +302,8 @@ void GenericCAO::initialize(const std::string &data)
 			player->setCAO(this);
 		}
 	}
+
+	m_enable_shaders = g_settings->getBool("enable_shaders");
 }
 
 void GenericCAO::processInitData(const std::string &data)
@@ -471,6 +474,13 @@ void GenericCAO::addToScene(ITextureSource *tsrc)
 		return;
 	}
 
+	IShaderSource *shdrsrc = m_client->getShaderSource();
+
+	if (m_enable_shaders) {
+		u32 shader_id = shdrsrc->getShader("model_shader", TILE_MATERIAL_BASIC, NDT_NORMAL, (m_glow < 0));
+		m_material_type = shdrsrc->getShaderInfo(shader_id).material;
+	}
+
 	if (m_prop.visual == "sprite") {
 		infostream<<"GenericCAO::addToScene(): single_sprite"<<std::endl;
 		m_spritenode = RenderingEngine::get_scene_manager()->addBillboardSceneNode(
@@ -480,8 +490,14 @@ void GenericCAO::addToScene(ITextureSource *tsrc)
 				tsrc->getTextureForMesh("unknown_node.png"));
 		m_spritenode->setMaterialFlag(video::EMF_LIGHTING, false);
 		m_spritenode->setMaterialFlag(video::EMF_BILINEAR_FILTER, false);
-		m_spritenode->setMaterialType(video::EMT_TRANSPARENT_ALPHA_CHANNEL_REF);
 		m_spritenode->setMaterialFlag(video::EMF_FOG_ENABLE, true);
+		if (m_enable_shaders) {
+			m_spritenode->setMaterialType(m_material_type);
+			m_spritenode->setMaterialFlag(video::EMF_GOURAUD_SHADING,false);
+			m_spritenode->setMaterialFlag(video::EMF_NORMALIZE_NORMALS,true);
+		} else {
+			m_spritenode->setMaterialType(video::EMT_TRANSPARENT_ALPHA_CHANNEL_REF);
+		}
 		u8 li = m_last_light;
 		m_spritenode->setColor(video::SColor(255,li,li,li));
 		m_spritenode->setSize(m_prop.visual_size*BS);
@@ -512,7 +528,13 @@ void GenericCAO::addToScene(ITextureSource *tsrc)
 			buf->getMaterial().setFlag(video::EMF_LIGHTING, false);
 			buf->getMaterial().setFlag(video::EMF_BILINEAR_FILTER, false);
 			buf->getMaterial().setFlag(video::EMF_FOG_ENABLE, true);
-			buf->getMaterial().MaterialType = video::EMT_TRANSPARENT_ALPHA_CHANNEL;
+			if (m_enable_shaders) {
+				buf->getMaterial().MaterialType = m_material_type;
+				buf->getMaterial().setFlag(video::EMF_GOURAUD_SHADING,false);
+				buf->getMaterial().setFlag(video::EMF_NORMALIZE_NORMALS,true);
+			} else {
+				buf->getMaterial().MaterialType = video::EMT_TRANSPARENT_ALPHA_CHANNEL_REF;
+			}
 			// Add to mesh
 			mesh->addMeshBuffer(buf);
 			buf->drop();
@@ -531,7 +553,13 @@ void GenericCAO::addToScene(ITextureSource *tsrc)
 			buf->getMaterial().setFlag(video::EMF_LIGHTING, false);
 			buf->getMaterial().setFlag(video::EMF_BILINEAR_FILTER, false);
 			buf->getMaterial().setFlag(video::EMF_FOG_ENABLE, true);
-			buf->getMaterial().MaterialType = video::EMT_TRANSPARENT_ALPHA_CHANNEL_REF;
+			if (m_enable_shaders) {
+				buf->getMaterial().MaterialType = m_material_type;
+				buf->getMaterial().setFlag(video::EMF_GOURAUD_SHADING,false);
+				buf->getMaterial().setFlag(video::EMF_NORMALIZE_NORMALS,true);
+			} else {
+				buf->getMaterial().MaterialType = video::EMT_TRANSPARENT_ALPHA_CHANNEL_REF;
+			}
 			// Add to mesh
 			mesh->addMeshBuffer(buf);
 			buf->drop();
@@ -558,7 +586,13 @@ void GenericCAO::addToScene(ITextureSource *tsrc)
 
 		m_meshnode->setMaterialFlag(video::EMF_LIGHTING, false);
 		m_meshnode->setMaterialFlag(video::EMF_BILINEAR_FILTER, false);
-		m_meshnode->setMaterialType(video::EMT_TRANSPARENT_ALPHA_CHANNEL_REF);
+		if (m_enable_shaders) {
+			m_meshnode->setMaterialType(m_material_type);
+			m_meshnode->setMaterialFlag(video::EMF_GOURAUD_SHADING,false);
+			m_meshnode->setMaterialFlag(video::EMF_NORMALIZE_NORMALS,true);
+		} else {
+			m_meshnode->setMaterialType(video::EMT_TRANSPARENT_ALPHA_CHANNEL_REF);
+		}
 		m_meshnode->setMaterialFlag(video::EMF_FOG_ENABLE, true);
 	}
 	else if(m_prop.visual == "mesh") {
@@ -587,7 +621,13 @@ void GenericCAO::addToScene(ITextureSource *tsrc)
 
 			m_animated_meshnode->setMaterialFlag(video::EMF_LIGHTING, true);
 			m_animated_meshnode->setMaterialFlag(video::EMF_BILINEAR_FILTER, false);
-			m_animated_meshnode->setMaterialType(video::EMT_TRANSPARENT_ALPHA_CHANNEL_REF);
+			if (m_enable_shaders) {
+				m_animated_meshnode->setMaterialType(m_material_type);
+				m_animated_meshnode->setMaterialFlag(video::EMF_GOURAUD_SHADING,false);
+				m_animated_meshnode->setMaterialFlag(video::EMF_NORMALIZE_NORMALS,true);
+			} else {
+				m_animated_meshnode->setMaterialType(video::EMT_TRANSPARENT_ALPHA_CHANNEL_REF);
+			}
 			m_animated_meshnode->setMaterialFlag(video::EMF_FOG_ENABLE, true);
 			m_animated_meshnode->setMaterialFlag(video::EMF_BACK_FACE_CULLING, backface_culling);
 		}
@@ -643,33 +683,40 @@ void GenericCAO::addToScene(ITextureSource *tsrc)
 	updateAttachments();
 }
 
-void GenericCAO::updateLight(u8 light_at_pos)
+void GenericCAO::updateLight(u8 light_at_pos, u8 artificial_light_ratio)
 {
 	// Don't update light of attached one
 	if (getParent() != NULL) {
 		return;
 	}
 
-	updateLightNoCheck(light_at_pos);
+	updateLightNoCheck(light_at_pos, artificial_light_ratio);
 
 	// Update light of all children
 	for (u16 i : m_children) {
 		ClientActiveObject *obj = m_env->getActiveObject(i);
 		if (obj) {
-			obj->updateLightNoCheck(light_at_pos);
+			obj->updateLightNoCheck(light_at_pos, artificial_light_ratio);
 		}
 	}
 }
 
-void GenericCAO::updateLightNoCheck(u8 light_at_pos)
+void GenericCAO::updateLightNoCheck(u8 light_at_pos, u8 artificial_light_ratio)
 {
 	if (m_glow < 0)
 		return;
 
+	if (!m_enable_shaders)
+		artificial_light_ratio = 255;
+
+	// The 17 comes from the nearest multiplier for 256 / 15, where 15 is the max light level
+	artificial_light_ratio = core::clamp(artificial_light_ratio + (m_glow * 17), 0, 255);
+
 	u8 li = decode_light(light_at_pos + m_glow);
-	if (li != m_last_light)	{
+	if (li != m_last_light || artificial_light_ratio != m_last_artificial_light_ratio) {
 		m_last_light = li;
-		video::SColor color(255,li,li,li);
+		m_last_artificial_light_ratio = artificial_light_ratio;
+		video::SColor color(artificial_light_ratio,li,li,li);
 		if (m_meshnode) {
 			setMeshColor(m_meshnode->getMesh(), color);
 		} else if (m_animated_meshnode) {
@@ -1172,7 +1219,7 @@ void GenericCAO::updateAnimationSpeed()
 {
 	if (!m_animated_meshnode)
 		return;
-        
+
 	m_animated_meshnode->setAnimationSpeed(m_animation_speed);
 }
 

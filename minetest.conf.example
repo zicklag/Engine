@@ -511,6 +511,16 @@
 #    type: path
 # shader_path =
 
+#### Advanced Lighting
+
+#    Enables directional environment lighting
+#    type: bool
+# directional_shading = false
+
+#    Enables per-pixel specular highlights
+#    type: bool
+# specular_lighting = false
+
 #### Tone Mapping
 
 #    Enables filmic tone mapping
@@ -518,6 +528,7 @@
 # tone_mapping = false
 
 #### Bumpmapping
+
 
 #    Enables bumpmapping for textures. Normalmaps need to be supplied by the texture pack
 #    or need to be auto-generated.
@@ -2804,4 +2815,3 @@
 #    at the cost of slightly buggy caves.
 #    type: int
 # num_emerge_threads = 1
-
