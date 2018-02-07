@@ -65,7 +65,7 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${COMMON_CFLAGS}")
 
 # Standard flags to use for each build type.
 if(CMAKE_COMPILER_IS_GNUCC)
-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pipe -Wall -Wextra -Wshadow -W -pedantic -std=gnu99")
+	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC -pipe -Wall -Wextra -Wshadow -W -pedantic -std=gnu99")
 	set(CMAKE_C_FLAGS_RELEASE        "${CMAKE_C_FLAGS_RELEASE}     -O2")
 	set(CMAKE_C_FLAGS_DEBUG          "${CMAKE_C_FLAGS_DEBUG}       -O0 -g")
 	set(CMAKE_C_FLAGS_PROFILE        "${CMAKE_C_FLAGS_PROFILE}     -O1 -g")
@@ -74,4 +74,3 @@ endif(CMAKE_COMPILER_IS_GNUCC)
 
 
 add_subdirectory(src build)
-
